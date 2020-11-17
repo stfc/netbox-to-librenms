@@ -4,6 +4,8 @@ import pynetbox
 import requests
 import sys
 
+from script_config import ca_dir, libnms_token, libnms_api
+
 rfh = RotatingFileHandler(
   filename = "pull_netbox.log",
   maxBytes = 5*1024*1024,
@@ -22,12 +24,12 @@ def link_device(libnms_name, netbox_id, libnms_session):
   Link libreNMS and Netbox device by adding a component with the label netbox_id
   to the LibreNMS device with hostname libnms_name
   """
-  response = libnms_session.post('https://net.esc.rl.ac.uk/api/v0/devices/'+libnms_name+'/components/netbox_id')
+  response = libnms_session.post(libnms_api+libnms_name+'/components/netbox_id')
   #Get the ID of the component just created so it can be modified and labelled
   component_id = list(response.json()["components"])[0]
   component_data = '{"%s": {"type": "netbox_id", "label": "%s", "status": 1, "ignore": 0, "disabled": 0, "error": ""}}' % (component_id, netbox_id)
   try:
-    libnms_session.put('https://net.esc.rl.ac.uk/api/v0/devices/'+libnms_name+'/components', data=component_data) 
+    libnms_session.put(libnms_api+libnms_name+'/components', data=component_data) 
   except:
     logging.exception(f'Failed to link device with name "{libnms_name}" with netbox id "{netbox_id}": ')
 
@@ -46,21 +48,14 @@ def update_device(libnms_name, libnms_ip, netbox_name, netbox_ip, libnms_session
     input.append(netbox_ip)
   if fields:
     data = '{"field": ' + str(fields) + ', "data": ' + str(input) + '}'
-    try:
-      libnms_session.patch('https://net.esc.rl.ac.uk/api/v0/devices/' + libnms_name, data=data)
-    except:
-      logging.exception(f"""Failed to update libreNMS device with original name '{libnms_name}' and 
-                            new name '{netbox_name}' and original IP '{libnms_ip}' and new IP '{netbox_ip}': """)
+   try:
+     libnms_session.patch(libnms_api+libnms_name, data=data)
+   except:
+     logging.exception(f"""Failed to update libreNMS device with original name '{libnms_name}' and 
+                           new name '{netbox_name}' and original IP '{libnms_ip}' and new IP '{netbox_ip}': """)
 
 logging.info("Script beginning")
  
-ca_dir = 'eScience-CA.pem'
-libnms_token_file = open('librenms_token.txt')
-libnms_token = libnms_token_file.readline()
-libnms_token = libnms_token[:-1] #Get rid of newline
-libnms_token = {'X-Auth-Token': libnms_token}
-libnms_token_file.close()
-
 #Create netbox and librenms sessions and get lists of devices
 netbox_session = requests.Session()
 netbox_session.verify = ca_dir
@@ -96,10 +91,10 @@ for device in netbox_devices_init:
 
 libnms_session = requests.Session()
 libnms_session.verify = ca_dir
-libnms_session.headers = libnms_token
+libnms_session.headers = {'X-Auth-Token': libnms_token}
 
 try:
-  librenms_devices = libnms_session.get('https://net.esc.rl.ac.uk/api/v0/devices')
+  librenms_devices = libnms_session.get(libnms_api)
 except:
   logging.exception('Error when getting devices from LibreNMS: ')
   sys.exit()
@@ -112,7 +107,7 @@ unlinked_libnms_devices = []
 for device in librenms_devices:
   name = device["hostname"]
   try:
-    response = libnms_session.get('https://net.esc.rl.ac.uk/api/v0/devices/'+name+'/components?type=netbox_id')
+    response = libnms_session.get(libnms_api+name+'/components?type=netbox_id')
   except:
     logging.exception(f'Error when getting LibreNMS components for device "{name}"')
     continue
@@ -151,9 +146,8 @@ for netbox_device in netbox_devices:
     #If no match found, create a new LibreNMS device
     if match_found == False:
       input_data = '{"hostname": "%s", "overwrite_ip": "%s", "community": "public"}' % (netbox_name, netbox_ip)
-      print(input_data)
       try:
-        libnms_session.post('https://net.esc.rl.ac.uk/api/v0/devices', data=input_data)
+        libnms_session.post(libnms_api, data=input_data)
       except:
         logging.exception(f'Error when creating LibreNMS device with name "{netbox_name}" and IP "{netbox_ip}"')
         continue
