@@ -145,7 +145,7 @@ for netbox_device in netbox_devices:
         break
     #If no match found, create a new LibreNMS device
     if match_found == False:
-      input_data = '{"hostname": "%s", "overwrite_ip": "%s", "community": "public"}' % (netbox_name, netbox_ip)
+      input_data = '{"hostname": "%s", "overwrite_ip": "%s", "version": "v2c", "community": "public"}' % (netbox_name, netbox_ip)
       try:
         libnms_session.post(libnms_api, data=input_data)
       except:
