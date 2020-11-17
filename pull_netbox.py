@@ -24,12 +24,14 @@ def link_device(libnms_name, netbox_id, libnms_session):
   Link libreNMS and Netbox device by adding a component with the label netbox_id
   to the LibreNMS device with hostname libnms_name
   """
-  response = libnms_session.post(libnms_api+libnms_name+'/components/netbox_id')
-  #Get the ID of the component just created so it can be modified and labelled
-  component_id = list(response.json()["components"])[0]
-  component_data = '{"%s": {"type": "netbox_id", "label": "%s", "status": 1, "ignore": 0, "disabled": 0, "error": ""}}' % (component_id, netbox_id)
   try:
-    libnms_session.put(libnms_api+libnms_name+'/components', data=component_data) 
+    response = libnms_session.post(libnms_api+libnms_name+'/components/netbox_id')
+    response.raise_for_status()
+    #Get the ID of the component just created so it can be modified and labelled
+    component_id = list(response.json()["components"])[0]
+    component_data = '{"%s": {"type": "netbox_id", "label": "%s", "status": 1, "ignore": 0, "disabled": 0, "error": ""}}' % (component_id, netbox_id)
+    response = libnms_session.put(libnms_api+libnms_name+'/components', data=component_data)
+    response.raise_for_status() 
   except:
     logging.exception(f'Failed to link device with name "{libnms_name}" with netbox id "{netbox_id}": ')
 
@@ -48,11 +50,12 @@ def update_device(libnms_name, libnms_ip, netbox_name, netbox_ip, libnms_session
     input.append(netbox_ip)
   if fields:
     data = '{"field": ' + str(fields) + ', "data": ' + str(input) + '}'
-   try:
-     libnms_session.patch(libnms_api+libnms_name, data=data)
-   except:
-     logging.exception(f"""Failed to update libreNMS device with original name '{libnms_name}' and 
-                           new name '{netbox_name}' and original IP '{libnms_ip}' and new IP '{netbox_ip}': """)
+    try:
+      response = libnms_session.patch(libnms_api+libnms_name, data=data)
+      response.raise_for_status()
+    except:
+      logging.exception(f"""Failed to update libreNMS device with original name '{libnms_name}' and 
+                            new name '{netbox_name}' and original IP '{libnms_ip}' and new IP '{netbox_ip}': """)
 
 logging.info("Script beginning")
  
@@ -95,6 +98,7 @@ libnms_session.headers = {'X-Auth-Token': libnms_token}
 
 try:
   librenms_devices = libnms_session.get(libnms_api)
+  librenms_device.raise_for_status()
 except:
   logging.exception('Error when getting devices from LibreNMS: ')
   sys.exit()
@@ -108,8 +112,9 @@ for device in librenms_devices:
   name = device["hostname"]
   try:
     response = libnms_session.get(libnms_api+name+'/components?type=netbox_id')
+    response.raise_for_status()
   except:
-    logging.exception(f'Error when getting LibreNMS components for device "{name}"')
+    logging.exception(f'Error when getting LibreNMS components for device "{name}": ')
     continue
   response = response.json()
   if "components" in response:
@@ -147,9 +152,10 @@ for netbox_device in netbox_devices:
     if match_found == False:
       input_data = '{"hostname": "%s", "overwrite_ip": "%s", "version": "v2c", "community": "public"}' % (netbox_name, netbox_ip)
       try:
-        libnms_session.post(libnms_api, data=input_data)
+        response = libnms_session.post(libnms_api, data=input_data)
+        response.raise_for_status()
       except:
-        logging.exception(f'Error when creating LibreNMS device with name "{netbox_name}" and IP "{netbox_ip}"')
+        logging.exception(f'Error when creating LibreNMS device with name "{netbox_name}" and IP "{netbox_ip}": ')
         continue
       link_device(netbox_name, netbox_id, libnms_session)
 
