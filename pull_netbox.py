@@ -49,7 +49,7 @@ def update_device(libnms_name, libnms_ip, netbox_name, netbox_ip, libnms_session
     fields.append("overwrite_ip")
     input.append(netbox_ip)
   if fields:
-    data = '{"field": ' + str(fields) + ', "data": ' + str(input) + '}'
+    data = '{"field": "%s", "data": "%s"}' % (str(fields), str(input))
     try:
       response = libnms_session.patch(libnms_api+libnms_name, data=data)
       response.raise_for_status()
@@ -98,7 +98,7 @@ libnms_session.headers = {'X-Auth-Token': libnms_token}
 
 try:
   librenms_devices = libnms_session.get(libnms_api)
-  librenms_device.raise_for_status()
+  librenms_devices.raise_for_status()
 except:
   logging.exception('Error when getting devices from LibreNMS: ')
   sys.exit()
