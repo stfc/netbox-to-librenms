@@ -1,3 +1,4 @@
+import json
 import logging
 from logging.handlers import RotatingFileHandler
 import pynetbox
@@ -51,9 +52,10 @@ def update_device(libnms_name, libnms_ip, netbox_name, netbox_ip, libnms_session
     fields.append("overwrite_ip")
     input.append(netbox_ip)
   if fields:
-    data = '{"field": "%s", "data": "%s"}' % (str(fields), str(input))
+    data = '{"field": %s, "data": %s}' % (json.dumps(fields), json.dumps(input))
     try:
       response = libnms_session.patch(libnms_api+libnms_name, data=data)
+      print(response.json())
       if response.json()["status"] == "error":
         raise Exception(f'Error received from LibreNMS: {response.json()["message"]}') 
     except:
@@ -146,7 +148,7 @@ for netbox_device in netbox_devices:
     #Try linking netbox device to an unlinked libreNMS device
     match_found = False
     for libnms_device in unlinked_libnms_devices:
-      if libnms_device["ip"] == netbox_ip:
+      if libnms_device["ip"] == netbox_ip or libnms_device["hostname"] == netbox_name:
         match_found = True
         libnms_name = libnms_device["hostname"]
         libnms_ip = libnms_device["overwrite_ip"]
