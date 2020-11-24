@@ -41,26 +41,25 @@ def link_device(libnms_name, netbox_id, libnms_session):
 def update_device(libnms_name, libnms_ip, netbox_name, netbox_ip, libnms_session):
   """
   Update name and IP of libreNMS device to be the same as that of the netbox device that
-  it is linked to if they are not already the same
+  it is linked to (if they are not already the same)
   """
-  fields = []
-  input = []
-  if libnms_name != netbox_name:
-    fields.append("hostname")
-    input.append(netbox_name)
-  if libnms_ip != netbox_ip:
-    fields.append("overwrite_ip")
-    input.append(netbox_ip)
-  if fields:
-    data = '{"field": %s, "data": %s}' % (json.dumps(fields), json.dumps(input))
-    try:
-      response = libnms_session.patch(libnms_api+libnms_name, data=data)
-      print(response.json())
+  try:
+    if libnms_name != netbox_name:
+      print(libnms_name, netbox_name)
+      response = libnms_session.patch(libnms_api + libnms_name + '/rename/' + netbox_name)
       if response.json()["status"] == "error":
-        raise Exception(f'Error received from LibreNMS: {response.json()["message"]}') 
-    except:
-      logging.exception(f"""Failed to update libreNMS device with original name '{libnms_name}' and 
-                            new name '{netbox_name}' and original IP '{libnms_ip}' and new IP '{netbox_ip}': """)
+        raise Exception(f'Error received from LibreNMS: {response.json["message"]}')
+  except:
+    logging.exception(f"""Failed to update libreNMS device name from '{libnms_name}' to '{netbox_name}'""")
+  try:
+    if libnms_ip != netbox_ip:
+      data = '{"field": "overwrite_ip", "data": "%s"}' % netbox_ip
+      print(data)
+      response = libnms_session.patch(libnms_api_libnms_name, data=data)
+      if response.json()["status"] == "error":
+        raise Exception(f'Error received from LibreNMS: {response.json["message"]}')
+  except:
+    logging.exception(f"""Failed to update libreNMS device IP from '{libnms_ip}' to '{netbox_ip}'""")
 
 logging.info("Script beginning")
  
