@@ -1,3 +1,5 @@
+log_file = 'pull_netbox.log'
 ca_dir = 'eScience-CA.pem' #Directory of a copy of the eScience CA for verifying the https connection to Netbox&LibreNMS
 libnms_token = 'xxxxxxxxxxxxx' #A LibreNMS token with permissions to read and write at least
 libnms_api = 'https://net.esc.rl.ac.uk/api/v0/devices/' #The URL of the LibreNMS API devices directory
+netbox_api = 'https://hostname.fqdn' #Base url of the Netbox instance
