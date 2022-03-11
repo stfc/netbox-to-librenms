@@ -1,3 +1,5 @@
+#!/usr/bin/python3
+
 import json
 import logging
 from logging.handlers import RotatingFileHandler
@@ -5,10 +7,10 @@ import pynetbox
 import requests
 import sys
 
-from script_config import ca_dir, libnms_token, libnms_api
+from script_config import ca_dir, libnms_token, libnms_api, netbox_token, netbox_api, log_file
 
 rfh = RotatingFileHandler(
-  filename = "pull_netbox.log",
+  filename = log_file,
   maxBytes = 5*1024*1024,
   backupCount = 1
 )
@@ -66,7 +68,7 @@ logging.info("Script beginning")
 #Create netbox and librenms sessions and get lists of devices
 netbox_session = requests.Session()
 netbox_session.verify = ca_dir
-nb = pynetbox.api('https://netbox.esc.rl.ac.uk')
+nb = pynetbox.api(netbox_api,token = netbox_token)
 nb.http_session = netbox_session
 
 #Create a list of netbox roles to select, including anything with the word 'switch' in it
