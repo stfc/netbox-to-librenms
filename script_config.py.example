@@ -1,3 +1,7 @@
-ca_dir = 'eScience-CA.pem' #Directory of a copy of the eScience CA for verifying the https connection to Netbox&LibreNMS
+# Copy to script_config.py and edit entries below
+log_file = '/var/log/pull_netbox.log'
+ca_dir = '/etc/mycadir' #Directory of a copy of the CA for verifying the https connection to Netbox&LibreNMS
 libnms_token = 'xxxxxxxxxxxxx' #A LibreNMS token with permissions to read and write at least
-libnms_api = 'https://net.esc.rl.ac.uk/api/v0/devices/' #The URL of the LibreNMS API devices directory
+libnms_api = 'https://librenms.host/api/v0/devices/' #The URL of the LibreNMS API devices directory
+netbox_token = 'xxxxxxxxxxxxx' #Netbox readonly token 
+netbox_api = 'https://hostname.fqdn' #Base url of the Netbox instance
