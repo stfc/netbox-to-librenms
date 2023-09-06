@@ -57,7 +57,7 @@ def update_device(libnms_name, libnms_ip, netbox_name, netbox_ip, libnms_session
     if libnms_ip != netbox_ip:
       data = '{"field": "overwrite_ip", "data": "%s"}' % netbox_ip
       print(data)
-      response = libnms_session.patch(libnms_api_libnms_name, data=data)
+      response = libnms_session.patch(libnms_api + libnms_name, data=data)
       if response.json()["status"] == "error":
         raise Exception(f'Error received from LibreNMS: {response.json["message"]}')
   except:
