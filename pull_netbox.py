@@ -1,6 +1,5 @@
 #!/usr/bin/python3
 
-import json
 import logging
 from logging.handlers import RotatingFileHandler
 import pynetbox
@@ -8,15 +7,14 @@ import requests
 import sys
 
 from script_config import (
-    ca_dir,
-    libnms_token,
-    libnms_api,
-    netbox_token,
-    netbox_api,
-    log_file,
+    LIBNMS_TOKEN,
+    LIBNMS_API,
+    NETBOX_TOKEN,
+    NETBOX_API,
+    LOG_FILE,
 )
 
-rfh = RotatingFileHandler(filename=log_file, maxBytes=5 * 1024 * 1024, backupCount=1)
+rfh = RotatingFileHandler(filename=LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=1)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -33,7 +31,7 @@ def link_device(libnms_name, netbox_id, libnms_session):
     """
     try:
         response = libnms_session.post(
-            libnms_api + libnms_name + "/components/netbox_id"
+            LIBNMS_API + libnms_name + "/components/netbox_id"
         )
         if response.json()["status"] == "error":
             raise Exception(
@@ -46,7 +44,7 @@ def link_device(libnms_name, netbox_id, libnms_session):
             % (component_id, netbox_id)
         )
         response = libnms_session.put(
-            libnms_api + libnms_name + "/components", data=component_data
+            LIBNMS_API + libnms_name + "/components", data=component_data
         )
         if response.json()["status"] == "error":
             raise Exception(
@@ -67,7 +65,7 @@ def update_device(libnms_name, libnms_ip, netbox_name, netbox_ip, libnms_session
         if libnms_name != netbox_name:
             print(libnms_name, netbox_name)
             response = libnms_session.patch(
-                libnms_api + libnms_name + "/rename/" + netbox_name
+                LIBNMS_API + libnms_name + "/rename/" + netbox_name
             )
             if response.json()["status"] == "error":
                 raise Exception(
@@ -81,7 +79,7 @@ def update_device(libnms_name, libnms_ip, netbox_name, netbox_ip, libnms_session
         if libnms_ip != netbox_ip:
             data = '{"field": "overwrite_ip", "data": "%s"}' % netbox_ip
             print(data)
-            response = libnms_session.patch(libnms_api + libnms_name, data=data)
+            response = libnms_session.patch(LIBNMS_API + libnms_name, data=data)
             if response.json()["status"] == "error":
                 raise Exception(
                     f'Error received from LibreNMS: {response.json["message"]}'
@@ -95,10 +93,7 @@ def update_device(libnms_name, libnms_ip, netbox_name, netbox_ip, libnms_session
 logging.info("Script beginning")
 
 # Create netbox and librenms sessions and get lists of devices
-netbox_session = requests.Session()
-netbox_session.verify = ca_dir
-nb = pynetbox.api(netbox_api, token=netbox_token)
-nb.http_session = netbox_session
+nb = pynetbox.api(NETBOX_API, token=NETBOX_TOKEN)
 
 # Create a list of netbox roles to select, including anything with the word 'switch' in it
 try:
@@ -130,11 +125,10 @@ for device in netbox_devices_init:
         netbox_devices.append(device)
 
 libnms_session = requests.Session()
-libnms_session.verify = ca_dir
-libnms_session.headers = {"X-Auth-Token": libnms_token}
+libnms_session.headers = {"X-Auth-Token": LIBNMS_TOKEN}
 
 try:
-    response = libnms_session.get(libnms_api)
+    response = libnms_session.get(LIBNMS_API)
     if response.json()["status"] == "error":
         raise Exception(f'Error received from LibreNMS: {response.json()["message"]}')
 except:
@@ -149,7 +143,7 @@ unlinked_libnms_devices = []
 for device in librenms_devices:
     name = device["hostname"]
     try:
-        response = libnms_session.get(libnms_api + name + "/components?type=netbox_id")
+        response = libnms_session.get(LIBNMS_API + name + "/components?type=netbox_id")
         if response.json()["status"] == "error":
             raise Exception(
                 f'Error received from LibreNMS: {response.json()["message"]}'
@@ -205,7 +199,7 @@ for netbox_device in netbox_devices:
                 % (netbox_name, netbox_ip)
             )
             try:
-                response = libnms_session.post(libnms_api, data=input_data)
+                response = libnms_session.post(LIBNMS_API, data=input_data)
                 if response.json()["status"] == "error":
                     raise Exception(
                         f'Error received from LibreNMS: {response.json()["message"]}'

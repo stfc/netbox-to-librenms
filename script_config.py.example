@@ -1,7 +1,7 @@
 # Copy to script_config.py and edit entries below
-log_file = '/var/log/pull_netbox.log'
-ca_dir = '/etc/mycadir' #Directory of a copy of the CA for verifying the https connection to Netbox&LibreNMS
-libnms_token = 'xxxxxxxxxxxxx' #A LibreNMS token with permissions to read and write at least
-libnms_api = 'https://librenms.host/api/v0/devices/' #The URL of the LibreNMS API devices directory
-netbox_token = 'xxxxxxxxxxxxx' #Netbox readonly token 
-netbox_api = 'https://hostname.fqdn' #Base url of the Netbox instance
+LOG_FILE = '/var/log/pull_netbox.log'
+CA_DIR = '/etc/mycadir' #Directory of a copy of the CA for verifying the https connection to Netbox&LibreNMS
+LIBNMS_TOKEN = 'xxxxxxxxxxxxx' #A LibreNMS token with permissions to read and write at least
+LIBNMS_API = 'https://librenms.host/api/v0/devices/' #The URL of the LibreNMS API devices directory
+NETBOX_TOKEN = 'xxxxxxxxxxxxx' #Netbox readonly token 
+NETBOX_API = 'https://hostname.fqdn' #Base url of the Netbox instance
