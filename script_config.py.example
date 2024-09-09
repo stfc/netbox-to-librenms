@@ -5,3 +5,7 @@ LIBNMS_TOKEN = 'xxxxxxxxxxxxx' #A LibreNMS token with permissions to read and wr
 LIBNMS_API = 'https://librenms.host/api/v0/devices/' #The URL of the LibreNMS API devices directory
 NETBOX_TOKEN = 'xxxxxxxxxxxxx' #Netbox readonly token 
 NETBOX_API = 'https://hostname.fqdn' #Base url of the Netbox instance
+TENANTS = [
+    'a',
+    'b',
+]

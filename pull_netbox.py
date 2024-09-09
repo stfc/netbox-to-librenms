@@ -12,6 +12,7 @@ from script_config import (
     NETBOX_TOKEN,
     NETBOX_API,
     LOG_FILE,
+    TENANTS,
 )
 
 rfh = RotatingFileHandler(filename=LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=1)
@@ -112,7 +113,7 @@ netbox_roles_formatted.append("pdu")
 
 try:
     netbox_devices_init = nb.dcim.devices.filter(
-        role=netbox_roles_formatted, tenant_group="rig"
+        role=netbox_roles_formatted, tenant=TENANTS
     )
 except:
     logging.exception("Error when getting devices from netbox: ")
