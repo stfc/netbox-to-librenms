@@ -1,0 +1,18 @@
+# Copy to config.toml and edit entries below
+[librenms]
+api = "https://your-librenms/api/v0/devices/" # The URL of the LibreNMS API devices directory
+token = "your_librenms_token" # A LibreNMS token with permissions to read and write at least
+
+[netbox]
+api = "https://your-netbox/" # Base url of the Netbox instance
+token = "your_netbox_token" # Netbox readonly token
+tenants = ["tenant1", 42, "badwolf"] # Slugs or numerical IDs of netbox tenants to pull. Display names will not work.
+roles = ["router", "pdu"] # Role slugs to pull
+fuzzy_roles = ["switch", "hypervisor"] # Fuzzy role slugs to search for and include (i.e. "switch" for all roles with "switch" in the slug)
+statuses = ["active", "offline", "failed", "decommissioning"] # Netbox statuses allowed for pulled devices
+override_pull_ids = [1234, 567] # Netbox device IDs to pull ignoring role/tenant
+
+[general]
+log_file = "/path/to/logfile.log"
+ca_verify = true # True to verify SSL connections to LibreNMS with default authorities. Or give a directory of a copy of the CA to use. Or false to not verify.
+dry_run = false # Dry Run mode for debug/logging
