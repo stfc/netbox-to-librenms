@@ -8,9 +8,9 @@
 # ]
 # ///
 
+import ipaddress
 import logging
 import tomllib
-from collections import defaultdict
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -51,19 +51,19 @@ logging.basicConfig(
 )
 
 
-def link_device(libnms_id, libnms_name, netbox_id, netbox_name, libnms_session):
+def link_device(libnms_id, libnms_hostname, netbox_id, netbox_name, libnms_session):
     """
     Link libreNMS and Netbox device by adding a component with the label netbox_id
     to the LibreNMS device with hostname libnms_name
     """
     if DRY_RUN:
         logging.info(
-            f"[DRY RUN] Would link LibreNMS device {libnms_name} to NetBox ID {netbox_id} ('{netbox_name}')"
+            f"[DRY RUN] Would link LibreNMS device {libnms_id} ('{libnms_hostname}') to NetBox ID {netbox_id} ('{netbox_name}')"
         )
         return
     try:
         logging.info(
-            f"Linking LibreNMS device {libnms_name} to NetBox ID {netbox_id} ('{netbox_name}')"
+            f"Linking LibreNMS device {libnms_id} ('{libnms_hostname}') to NetBox ID {netbox_id} ('{netbox_name}')"
         )
         response = libnms_session.post(LIBNMS_API + libnms_id + "/components/netbox_id")
         if response.json()["status"] == "error":
@@ -85,59 +85,66 @@ def link_device(libnms_id, libnms_name, netbox_id, netbox_name, libnms_session):
             )
     except Exception:
         logging.exception(
-            f'Failed to link device with name "{libnms_name}" with netbox id "{netbox_id}".'
+            f'Failed to link device with name "{libnms_hostname}" with netbox id "{netbox_id}".'
         )
         raise
 
 
 def update_device(
-    libnms_id, libnms_name, libnms_ip, netbox_name, netbox_ip, libnms_session
+    libnms_id,
+    libnms_hostname,
+    libnms_display_name,
+    netbox_hostname,
+    netbox_name,
+    libnms_session,
 ):
     """
-    Update name and IP of libreNMS device to be the same as that of the netbox device that
+    Update hostname and display name of libreNMS device to be the same as that of the netbox device that
     it is linked to (if they are not already the same)
     """
+
     try:
-        if libnms_name.lower() != netbox_name.lower():
+        if libnms_hostname.lower() != netbox_hostname.lower():
             if DRY_RUN:
                 logging.info(
-                    f"[DRY RUN] Would rename '{libnms_name}' to '{netbox_name}'"
+                    f"[DRY RUN] Would change librenms device hostname '{libnms_hostname}' to '{netbox_hostname}'"
                 )
 
             else:
-                logging.info(f"Renaming '{libnms_name}' to '{netbox_name}'")
+                logging.info(f"Renaming '{libnms_hostname}' to '{netbox_hostname}'")
                 response = libnms_session.patch(
-                    LIBNMS_API + libnms_id + "/rename/" + netbox_name
+                    LIBNMS_API + libnms_id + "/rename/" + netbox_hostname
                 )
                 if response.json()["status"] == "error":
                     raise Exception(
                         f"Error received from LibreNMS: {response.json()['message']}"
                     )
-            libnms_name = netbox_name
+            libnms_hostname = netbox_hostname
     except Exception:
         logging.exception(
-            f"""Failed to update libreNMS device name from '{libnms_name}' to '{netbox_name}'"""
+            f"""Failed to update libreNMS device hostname from '{libnms_hostname}' to '{netbox_hostname}'"""
         )
         raise
     try:
-        if libnms_ip != netbox_ip:
+        if libnms_display_name != netbox_name:
             if DRY_RUN:
                 logging.info(
-                    f"[DRY RUN] Would update IP for '{libnms_name}' to '{netbox_ip}'"
+                    f"[DRY RUN] Would update display name for '{libnms_hostname}' from '{libnms_display_name}' to '{netbox_name}'"
                 )
             else:
-                logging.info(f"Updating IP for '{libnms_name}' to '{netbox_ip}'")
-                data = '{"field": "overwrite_ip", "data": "%s"}' % netbox_ip
-                logging.info(data)
+                logging.info(
+                    f"Updating display name for '{libnms_hostname}' from '{libnms_display_name}' to '{netbox_name}'"
+                )
+                data = '{"field": "display", "data": "%s"}' % netbox_name
                 response = libnms_session.patch(LIBNMS_API + libnms_id, data=data)
                 if response.json()["status"] == "error":
                     raise Exception(
                         f"Error received from LibreNMS: {response.json()['message']}"
                     )
-            libnms_ip = netbox_ip
+            libnms_display_name = netbox_name
     except Exception:
         logging.exception(
-            f"""Failed to update libreNMS device IP from '{libnms_ip}' to '{netbox_ip}'"""
+            f"""Failed to update libreNMS device display_name from '{libnms_display_name}' to '{netbox_name}'"""
         )
         raise
 
@@ -222,8 +229,6 @@ def main():
         raise
     librenms_devices = response.json()["devices"]
 
-    librenms_ip_map = defaultdict(list)
-
     # Create dictionary linking netbox ids to the libreNMS device they have been linked to, if any
     # Also create list of libreNMS devices with no netbox ID attached
     logging.info("[Step 4/5] Fetching map of Netbox/LibreNMS devices")
@@ -232,14 +237,29 @@ def main():
     for device in librenms_devices:
         name = device["hostname"]
         id = str(device["device_id"])
-        ip = str(device["ip"])
 
-        if ip in librenms_ip_map:
-            logging.warning(
-                f"Duplicate LibreNMS IP Entries. {ip} is already assigned to ID/Name(s) {librenms_ip_map[ip]} "
-            )
-
-        librenms_ip_map[ip].append({"ip": ip, "name": name})
+        if device["overwrite_ip"]:
+            if DRY_RUN:
+                logging.info(
+                    f"[DRY RUN] Overwrite IP found for '{name}': {device['overwrite_ip']}. Would remove it as it is deprecated."
+                )
+            else:
+                try:
+                    logging.info(
+                        f"Overwrite IP found for '{name}': {device['overwrite_ip']}. Removing as it is deprecated."
+                    )
+                    data = '{"field": "overwrite_ip", "data": null}'
+                    logging.info(data)
+                    response = libnms_session.patch(LIBNMS_API + id, data=data)
+                    if response.json()["status"] == "error":
+                        raise Exception(
+                            f"Error received from LibreNMS: {response.json()['message']}"
+                        )
+                except Exception:
+                    logging.exception(
+                        f"""Failed to remove overwrite IP from '{name}'"""
+                    )
+                    raise
 
         try:
             response = libnms_session.get(
@@ -262,7 +282,7 @@ def main():
 
                 if len(components) != 1:
                     raise ValueError(
-                        f"Expected one netbox ID attached to libreNMS device with name '{name}', got {len(components)}"
+                        f"Expected one netbox ID attached to libreNMS device with hostname '{name}', got {len(components)}"
                     )
 
                 component_id, component = next(iter(components.items()))
@@ -334,73 +354,83 @@ def main():
                 unlinked_libnms_devices[str(device["device_id"])] = {
                     "device_id": str(device["device_id"]),
                     "hostname": device["hostname"],
-                    "overwrite_ip": device["overwrite_ip"],
-                    "ip": device["ip"],
+                    "display": device["display"],
                 }
 
                 continue
 
             linked_libnms_devices[netbox_id] = {
                 "device_id": str(device["device_id"]),
+                "display": str(device["display"]),
                 "hostname": device["hostname"],
-                "overwrite_ip": device["overwrite_ip"],
             }
 
         else:
             unlinked_libnms_devices[str(device["device_id"])] = {
+                "device_id": str(device["device_id"]),
                 "hostname": device["hostname"],
-                "overwrite_ip": device["overwrite_ip"],
-                "ip": device["ip"],
+                "display": device["display"],
             }
 
     logging.info("[Step 5/5] Checking LibreNMS against Netbox and Updating")
     for netbox_id, netbox_device in netbox_devices.items():
         netbox_name = netbox_device.name
-        if (netbox_ip := netbox_device.primary_ip4) is not None:
-            netbox_ip = netbox_device.primary_ip4.address.split("/")[0]
-            netbox_name = getattr(netbox_ip, "dns_name", None) or netbox_name
 
         # Libre is for switches, primarily.
         # Hypervisors are on there, it's a grey area
         # Draw the line at only keeping/adding their OOB, else we'd have two entries per system
         if (netbox_oob_ip := netbox_device.oob_ip) is not None:
-            netbox_name = getattr(netbox_oob_ip, "dns_name", None) or netbox_name
+            netbox_hostname = getattr(netbox_oob_ip, "dns_name", None) or None
             netbox_ip = netbox_oob_ip.address.split("/")[0]
+        else:
+            netbox_ip = netbox_device.primary_ip4
+            netbox_hostname = getattr(netbox_ip, "dns_name", None) or None
+            netbox_ip = netbox_ip.address.split("/")[0]
+
+        # Set hostname to the IP if we didn't find a DNS name
+        if netbox_hostname is None:
+            netbox_hostname = netbox_ip
 
         if netbox_id in linked_libnms_devices:
             # Update linked device if any
             libnms_name = linked_libnms_devices[netbox_id]["hostname"]
-            libnms_ip = linked_libnms_devices[netbox_id]["overwrite_ip"]
             libnms_id = linked_libnms_devices[netbox_id]["device_id"]
+            libnms_display = linked_libnms_devices[netbox_id]["display"]
             update_device(
-                libnms_id,
-                libnms_name,
-                libnms_ip,
-                netbox_name,
-                netbox_ip,
-                libnms_session,
+                libnms_id=libnms_id,
+                libnms_hostname=libnms_name,
+                libnms_display_name=libnms_display,
+                netbox_hostname=netbox_hostname,
+                netbox_name=netbox_name,
+                libnms_session=libnms_session,
             )
         else:
             # Try linking netbox device to an unlinked libreNMS device
             match_found = False
             for libnms_id, libnms_device in unlinked_libnms_devices.items():
                 if (
-                    libnms_device["ip"] == netbox_ip
+                    libnms_device["hostname"] == netbox_hostname
                     or libnms_device["hostname"] == netbox_name
+                    or libnms_device["display"] == netbox_name
+                    or libnms_device["hostname"] == netbox_ip
                 ):
                     match_found = True
                     libnms_name = libnms_device["hostname"]
-                    libnms_ip = libnms_device["overwrite_ip"]
+                    libnms_display = libnms_device["display"]
                     link_device(
-                        libnms_id, libnms_name, netbox_id, netbox_name, libnms_session
+                        libnms_id=libnms_id,
+                        libnms_hostname=libnms_name,
+                        netbox_id=netbox_id,
+                        netbox_name=netbox_name,
+                        libnms_session=libnms_session,
                     )
                     update_device(
-                        libnms_id,
-                        libnms_name,
-                        libnms_ip,
-                        netbox_name,
-                        netbox_ip,
-                        libnms_session,
+                        libnms_id=libnms_id,
+                        libnms_hostname=libnms_name,
+                        libnms_display_name=libnms_display,
+                        netbox_hostname=netbox_hostname,
+                        netbox_name=netbox_name,
+                        libnms_session=libnms_session,
                     )
                     unlinked_libnms_devices.pop(libnms_id)
                     break
@@ -408,16 +438,14 @@ def main():
             if not match_found:
                 if DRY_RUN:
                     logging.info(
-                        f"[DRY RUN] Would create new LibreNMS device: {netbox_name} ({netbox_ip})"
+                        f"[DRY RUN] Would create new LibreNMS device: {netbox_hostname} ('{netbox_name}')"
                     )
                     continue
                 logging.info(
-                    f"Creating new LibreNMS device: {netbox_name} ({netbox_ip})"
+                    f"Creating new LibreNMS device: {netbox_hostname} ('{netbox_name}')"
                 )
-                input_data = (
-                    '{"hostname": "%s", "overwrite_ip": "%s", "version": "v2c", "community": "public"}'
-                    % (netbox_name, netbox_ip)
-                )
+                input_data = f'{{"hostname": "{netbox_hostname}", "display": "{netbox_name}", "version": "v2c", "community": "public"}}'
+
                 try:
                     response = libnms_session.post(LIBNMS_API, data=input_data)
                     if response.json()["status"] == "error":
@@ -429,31 +457,36 @@ def main():
                     libnms_name = libnms_device["hostname"]
                 except Exception:
                     logging.exception(
-                        f'Error when creating LibreNMS device with name "{netbox_name}" and IP "{netbox_ip}": '
+                        f'Error when creating LibreNMS device with name "{netbox_hostname}" and display name "{netbox_name}": '
                     )
                     continue
 
                 link_device(
-                    libnms_id, libnms_name, netbox_id, netbox_name, libnms_session
+                    libnms_id, libnms_name, netbox_id, netbox_hostname, libnms_session
                 )
     logging.info("Checking remaining unlinked devices")
     for libnms_id, libnms_device in unlinked_libnms_devices.items():
-        if len((mapped_ips := librenms_ip_map[libnms_device["ip"]])) > 1:
-            logging.warning(
-                f"""Orphaned LibreNMS device with ID {libnms_id} remains unlinked: {libnms_device}
-                    But, previously, it was found to have a duplicate ip: {mapped_ips}
-                    It's probably hence non-canonical and can be deleted."""
-            )
-            continue
         try:
             trial_resolve_nb = set()
-            nb_ip = nb.ipam.ip_addresses.get(address=libnms_device["ip"])
+            libnms_name = libnms_device["hostname"]
+            libnms_display = libnms_device["display"]
+
+            nb_ip = nb.ipam.ip_addresses.get(dns_name=libnms_name)
+            if not nb_ip:
+                try:
+                    ip = ipaddress.ip_address(libnms_name)
+                    nb_ip = nb.ipam.ip_addresses.get(address=str(ip))
+                except ValueError:
+                    # hostname is not an IP address
+                    pass
+
             if nb_ip:
                 trial_resolve_nb.update(nb.dcim.devices.filter(primary_ip4_id=nb_ip.id))
                 trial_resolve_nb.update(nb.dcim.devices.filter(oob_ip_id=nb_ip.id))
-            trial_resolve_nb.update(
-                nb.dcim.devices.filter(name=libnms_device["hostname"])
-            )
+
+            if libnms_display:
+                trial_resolve_nb.update(nb.dcim.devices.filter(name=libnms_display))
+
             if len(trial_resolve_nb) > 0:
                 resolved_devices = [
                     {
