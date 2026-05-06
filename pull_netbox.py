@@ -1,215 +1,478 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
+#
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#     "pynetbox==7.5.0",
+#     "requests>=2.33.1",
+# ]
+# ///
 
+import ipaddress
 import logging
+import tomllib
 from logging.handlers import RotatingFileHandler
+from pathlib import Path
+from typing import Any, TypedDict, cast
+
 import pynetbox
 import requests
-import sys
-
-from script_config import (
-    LIBNMS_TOKEN,
-    LIBNMS_API,
-    NETBOX_TOKEN,
-    NETBOX_API,
-    LOG_FILE,
-    TENANTS,
-)
-
-rfh = RotatingFileHandler(filename=LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=1)
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s:%(levelname)s - %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-    handlers=[rfh],
-)
+from pynetbox.models.dcim import Devices
+from pynetbox.models.ipam import IpAddresses
 
 
-def link_device(libnms_name, netbox_id, libnms_session):
-    """
-    Link libreNMS and Netbox device by adding a component with the label netbox_id
-    to the LibreNMS device with hostname libnms_name
-    """
-    try:
-        response = libnms_session.post(
-            LIBNMS_API + libnms_name + "/components/netbox_id"
-        )
-        if response.json()["status"] == "error":
-            raise Exception(
-                f'Error received from LibreNMS: {response.json()["message"]}'
+class LibreDeviceInfo(TypedDict):
+    device_id: str
+    hostname: str
+    display: str
+
+
+class LibreNMSClient:
+    """Encapsulates LibreNMS API interactions and error handling."""
+
+    def __init__(
+        self, api_url: str, token: str, verify: bool | str, dry_run: bool
+    ) -> None:
+        self.api_url = api_url.rstrip("/") + "/"
+        self.dry_run = dry_run
+        self.session = requests.Session()
+        self.session.headers.update({"X-Auth-Token": token})
+        self.session.verify = verify
+
+    def _request(self, method: str, endpoint: str, **kwargs: Any) -> dict[str, Any]:
+        """Wrapper for requests that automatically handles standard LibreNMS errors."""
+        url = self.api_url + endpoint.lstrip("/")
+        response = self.session.request(method, url, **kwargs)
+        response.raise_for_status()
+
+        try:
+            data: dict[str, Any] = response.json()
+        except ValueError:
+            return {}
+
+        if data.get("status") == "error":
+            raise Exception(f"LibreNMS API Error: {data.get('message')}")
+        return data
+
+    def get_devices(self) -> list[dict[str, Any]]:
+        return self._request("GET", "")["devices"]
+
+    def create_device(self, hostname: str, display_name: str) -> str:
+        if self.dry_run:
+            logging.info(
+                f"[DRY RUN] Would create LibreNMS device: {hostname} ('{display_name}')"
             )
-        # Get the ID of the component just created so it can be modified and labelled
-        component_id = list(response.json()["components"])[0]
-        component_data = (
-            '{"%s": {"type": "netbox_id", "label": "%s", "status": 1, "ignore": 0, "disabled": 0, "error": ""}}'
-            % (component_id, netbox_id)
-        )
-        response = libnms_session.put(
-            LIBNMS_API + libnms_name + "/components", data=component_data
-        )
-        if response.json()["status"] == "error":
-            raise Exception(
-                f'Error received from LibreNMS: {response.json()["message"]}'
+            return "dry-run-id"
+
+        logging.info(f"Creating new LibreNMS device: {hostname} ('{display_name}')")
+        payload = {
+            "hostname": hostname,
+            "display": display_name,
+            "version": "v2c",
+            "community": "public",
+        }
+        res = self._request("POST", "", json=payload)
+        return str(res["devices"][0]["device_id"])
+
+    def remove_overwrite_ip(self, device_id: str, hostname: str) -> None:
+        if self.dry_run:
+            logging.info(
+                f"[DRY RUN] Would remove deprecated overwrite IP for '{hostname}'"
             )
-    except:
-        logging.exception(
-            f'Failed to link device with name "{libnms_name}" with netbox id "{netbox_id}": '
+            return
+
+        logging.info(f"Removing deprecated overwrite IP for '{hostname}'")
+        self._request(
+            "PATCH", str(device_id), json={"field": "overwrite_ip", "data": None}
+        )
+
+    def get_netbox_component(self, hostname: str) -> dict[str, Any]:
+        res = self._request("GET", f"{hostname}/components?type=netbox_id")
+        return res.get("components", {})
+
+    def unlink_component(
+        self, device_id: str, component_id: str, netbox_id: str, hostname: str
+    ) -> None:
+        if self.dry_run:
+            logging.info(
+                f"[DRY RUN] Would unlink Netbox ID '{netbox_id}' from '{hostname}'"
+            )
+            return
+
+        logging.info(
+            f"Unlinking deleted/decommissioned Netbox ID '{netbox_id}' from '{hostname}'"
+        )
+        self._request("DELETE", f"{device_id}/components/{component_id}")
+
+    def link_device(
+        self, libnms_id: str, libnms_hostname: str, netbox_id: str, netbox_name: str
+    ) -> None:
+        if self.dry_run:
+            logging.info(
+                f"[DRY RUN] Would link '{libnms_hostname}' to NetBox ID {netbox_id} ('{netbox_name}')"
+            )
+            return
+
+        logging.info(
+            f"Linking '{libnms_hostname}' to NetBox ID {netbox_id} ('{netbox_name}')"
+        )
+        res = self._request("POST", f"{libnms_id}/components/netbox_id")
+        component_id = list(res["components"])[0]
+
+        component_data = {
+            str(component_id): {
+                "type": "netbox_id",
+                "label": str(netbox_id),
+                "status": 1,
+                "ignore": 0,
+                "disabled": 0,
+                "error": "",
+            }
+        }
+        self._request("PUT", f"{libnms_id}/components", json=component_data)
+
+    def rename_device(self, libnms_id: str, old_name: str, new_name: str) -> None:
+        if self.dry_run:
+            logging.info(f"[DRY RUN] Would rename '{old_name}' to '{new_name}'")
+            return
+        logging.info(f"Renaming '{old_name}' to '{new_name}'")
+        self._request("PATCH", f"{libnms_id}/rename/{new_name}")
+
+    def update_display_name(
+        self, libnms_id: str, hostname: str, old_display: str, new_display: str
+    ) -> None:
+        if self.dry_run:
+            logging.info(
+                f"[DRY RUN] Would update display name for '{hostname}' from '{old_display}' to '{new_display}'"
+            )
+            return
+        logging.info(
+            f"Updating display name for '{hostname}' from '{old_display}' to '{new_display}'"
+        )
+        self._request(
+            "PATCH", str(libnms_id), json={"field": "display", "data": new_display}
         )
 
 
-def update_device(libnms_name, libnms_ip, netbox_name, netbox_ip, libnms_session):
-    """
-    Update name and IP of libreNMS device to be the same as that of the netbox device that
-    it is linked to (if they are not already the same)
-    """
-    try:
-        if libnms_name != netbox_name:
-            print(libnms_name, netbox_name)
-            response = libnms_session.patch(
-                LIBNMS_API + libnms_name + "/rename/" + netbox_name
+def fetch_netbox_devices(
+    nb: pynetbox.api, nb_config: dict[str, Any], netbox_roles: list[str]
+) -> list[Devices]:
+    tenant_slugs = [str(t) for t in nb_config["tenants"] if not str(t).isdigit()]
+    tenant_ids = [int(t) for t in nb_config["tenants"] if str(t).isdigit()]
+
+    devices_init: list[Devices] = []
+    statuses: list[str] = nb_config["statuses"]
+
+    if tenant_slugs:
+        devices_init.extend(
+            nb.dcim.devices.filter(
+                role=netbox_roles, tenant=tenant_slugs, status=statuses
             )
-            if response.json()["status"] == "error":
-                raise Exception(
-                    f'Error received from LibreNMS: {response.json["message"]}'
-                )
-    except:
-        logging.exception(
-            f"""Failed to update libreNMS device name from '{libnms_name}' to '{netbox_name}'"""
         )
-    try:
-        if libnms_ip != netbox_ip:
-            data = '{"field": "overwrite_ip", "data": "%s"}' % netbox_ip
-            print(data)
-            response = libnms_session.patch(LIBNMS_API + libnms_name, data=data)
-            if response.json()["status"] == "error":
-                raise Exception(
-                    f'Error received from LibreNMS: {response.json["message"]}'
-                )
-    except:
-        logging.exception(
-            f"""Failed to update libreNMS device IP from '{libnms_ip}' to '{netbox_ip}'"""
+    if tenant_ids:
+        devices_init.extend(
+            nb.dcim.devices.filter(
+                role=netbox_roles, tenant_id=tenant_ids, status=statuses
+            )
         )
+    if nb_config.get("override_pull_ids"):
+        devices_init.extend(nb.dcim.devices.filter(id=nb_config["override_pull_ids"]))
+    return devices_init
 
 
-logging.info("Script beginning")
+def filter_netbox_devices(devices_init: list[Devices]) -> dict[str, Devices]:
+    valid_devices: dict[str, Devices] = {}
+    for device in devices_init:
+        if device.primary_ip or device.oob_ip:
+            valid_devices[str(device.id)] = device
+        else:
+            logging.warning(f"Device {device} has no primary or OOB IPv4")
+    return valid_devices
 
-# Create netbox and librenms sessions and get lists of devices
-nb = pynetbox.api(NETBOX_API, token=NETBOX_TOKEN)
 
-# Create a list of netbox roles to select, including anything with the word 'switch' in it
-try:
-    netbox_roles = nb.dcim.device_roles.filter("switch")
-except:
-    logging.exception("Error when getting device roles from netbox: ")
-    sys.exit()
-netbox_roles_formatted = []
-for role in netbox_roles:
-    role = str(role)
-    role = role.lower()
-    role = role.replace(" ", "-")
-    netbox_roles_formatted.append(role)
-netbox_roles_formatted.append("router")
-netbox_roles_formatted.append("pdu")
-
-try:
-    netbox_devices_init = nb.dcim.devices.filter(
-        role=netbox_roles_formatted, tenant=TENANTS
-    )
-except:
-    logging.exception("Error when getting devices from netbox: ")
-    sys.exit()
-
-# Filter out netbox devices without a primary ip
-netbox_devices = []
-for device in netbox_devices_init:
-    if dict(device)["primary_ip"]:
-        netbox_devices.append(device)
-
-libnms_session = requests.Session()
-libnms_session.headers = {"X-Auth-Token": LIBNMS_TOKEN}
-
-try:
-    response = libnms_session.get(LIBNMS_API)
-    if response.json()["status"] == "error":
-        raise Exception(f'Error received from LibreNMS: {response.json()["message"]}')
-except:
-    logging.exception("Error when getting devices from LibreNMS: ")
-    sys.exit()
-librenms_devices = response.json()["devices"]
-
-# Create dictionary linking netbox ids to the libreNMS device they have been linked to, if any
-# Also create list of libreNMS devices with no netbox ID attached
-linked_libnms_devices = {}
-unlinked_libnms_devices = []
-for device in librenms_devices:
-    name = device["hostname"]
-    try:
-        response = libnms_session.get(LIBNMS_API + name + "/components?type=netbox_id")
-        if response.json()["status"] == "error":
-            raise Exception(
-                f'Error received from LibreNMS: {response.json()["message"]}'
-            )
-    except:
-        logging.exception(
-            f'Error when getting LibreNMS components for device "{name}": '
+def get_netbox_roles(nb: pynetbox.api, nb_config: dict[str, Any]) -> list[str]:
+    netbox_roles = [
+        str(nb.dcim.device_roles.get(slug=r).slug)  # type: ignore
+        for r in nb_config["roles"]
+    ]  # type: ignore
+    for fuzzy in nb_config["fuzzy_roles"]:
+        netbox_roles.extend(
+            [str(role.slug) for role in nb.dcim.device_roles.filter(fuzzy)]
         )
-        continue
-    response = response.json()
-    if "components" in response:
-        # Get the last netbox_id attached. There should only be 1 netbox_id, if there are more there's a problem somewhere
-        for component in response["components"].values():
-            netbox_id = int(component["label"])
-        linked_libnms_devices[netbox_id] = device
-        if len(response["components"]) >= 2:
-            logging.warning(
-                f'More than one netbox ID attached to libreNMS device with name "{name}"'
-            )
-    else:
-        unlinked_libnms_devices.append(device)
+    return netbox_roles
 
-for netbox_device in netbox_devices:
-    netbox_id = dict(netbox_device)["id"]
-    netbox_name = dict(netbox_device)["name"]
-    netbox_ip = dict(netbox_device)["primary_ip"]["address"]
-    netbox_ip = (netbox_ip.split("/"))[0]
-    if netbox_id in linked_libnms_devices:
-        # Update linked device if any
-        libnms_name = linked_libnms_devices[netbox_id]["hostname"]
-        libnms_ip = linked_libnms_devices[netbox_id]["overwrite_ip"]
-        update_device(libnms_name, libnms_ip, netbox_name, netbox_ip, libnms_session)
-    else:
-        # Try linking netbox device to an unlinked libreNMS device
-        match_found = False
-        for libnms_device in unlinked_libnms_devices:
-            if (
-                libnms_device["ip"] == netbox_ip
-                or libnms_device["hostname"] == netbox_name
-            ):
-                match_found = True
-                libnms_name = libnms_device["hostname"]
-                libnms_ip = libnms_device["overwrite_ip"]
-                link_device(libnms_name, netbox_id, libnms_session)
-                update_device(
-                    libnms_name, libnms_ip, netbox_name, netbox_ip, libnms_session
-                )
-                break
-        # If no match found, create a new LibreNMS device
-        if match_found == False:
-            input_data = (
-                '{"hostname": "%s", "overwrite_ip": "%s", "version": "v2c", "community": "public"}'
-                % (netbox_name, netbox_ip)
-            )
-            try:
-                response = libnms_session.post(LIBNMS_API, data=input_data)
-                if response.json()["status"] == "error":
-                    raise Exception(
-                        f'Error received from LibreNMS: {response.json()["message"]}'
-                    )
-            except:
-                logging.exception(
-                    f'Error when creating LibreNMS device with name "{netbox_name}" and IP "{netbox_ip}": '
-                )
+
+def fetch_libnms_mapping(
+    client: LibreNMSClient,
+    netbox_devices: dict[str, Devices],
+) -> tuple[dict[str, LibreDeviceInfo], dict[str, LibreDeviceInfo]]:
+    """Maps LibreNMS devices to NetBox IDs, identifying linked and unlinked devices."""
+    linked: dict[str, LibreDeviceInfo] = {}
+    unlinked: dict[str, LibreDeviceInfo] = {}
+
+    for device in client.get_devices():
+        dev_id = str(device["device_id"])
+        hostname = str(device["hostname"])
+        display = str(device["display"])
+
+        try:
+            if device.get("overwrite_ip"):
+                client.remove_overwrite_ip(dev_id, hostname)
+
+            components = client.get_netbox_component(hostname)
+
+            if not components:
+                unlinked[dev_id] = {
+                    "device_id": dev_id,
+                    "hostname": hostname,
+                    "display": display,
+                }
                 continue
-            link_device(netbox_name, netbox_id, libnms_session)
 
-logging.info("Script finished")
+            if len(components) > 1:
+                raise ValueError(
+                    f"Expected 1 Netbox ID attached to '{hostname}', got {len(components)}"
+                )
+
+            component_id, component = next(iter(components.items()))
+            netbox_id = str(component["label"])
+
+            if netbox_id not in netbox_devices:
+                # Device must have been filtered out, or deleted/decommisioned. Unlink it.
+                client.unlink_component(dev_id, component_id, netbox_id, hostname)
+                unlinked[dev_id] = {
+                    "device_id": dev_id,
+                    "hostname": hostname,
+                    "display": display,
+                }
+            else:
+                linked[netbox_id] = {
+                    "device_id": dev_id,
+                    "display": display,
+                    "hostname": hostname,
+                }
+        except Exception:
+            logging.exception(
+                f"Failed to process LibreNMS device mapping for '{hostname}'. Skipping device."
+            )
+            continue
+
+    return linked, unlinked
+
+
+def sync_device(
+    client: LibreNMSClient,
+    libnms_info: LibreDeviceInfo,
+    nb_hostname: str,
+    nb_name: str,
+) -> None:
+    """Checks and updates LibreNMS device hostnames and display names if out of sync."""
+    libnms_id = libnms_info["device_id"]
+
+    if libnms_info["hostname"].lower() != nb_hostname.lower():
+        client.rename_device(libnms_id, libnms_info["hostname"], nb_hostname)
+        libnms_info["hostname"] = nb_hostname
+
+    if libnms_info["display"] != nb_name:
+        client.update_display_name(
+            libnms_id, libnms_info["hostname"], libnms_info["display"], nb_name
+        )
+        libnms_info["display"] = nb_name
+
+
+def get_netbox_ip_and_hostname(device: Devices, test=None) -> tuple[str, str]:
+    """Extracts preferred IP and hostname from a NetBox device."""
+    target_ip = cast(
+        IpAddresses, device.oob_ip if device.oob_ip else device.primary_ip4
+    )
+    target_ip_address = str(target_ip.address)
+
+    hostname = str(
+        getattr(target_ip, "dns_name", None)
+        or target_ip_address.split("/", maxsplit=1)[0]
+    )
+    ip_addr = target_ip_address.split("/", maxsplit=1)[0]
+    return ip_addr, hostname
+
+
+def sync_netbox_librenms(
+    libnms: LibreNMSClient,
+    netbox_devices: dict[str, Devices],
+    linked_libnms: dict[str, LibreDeviceInfo],
+    unlinked_libnms: dict[str, LibreDeviceInfo],
+) -> None:
+    for nb_id, nb_device in netbox_devices.items():
+        try:
+            nb_ip, nb_hostname = get_netbox_ip_and_hostname(nb_device)
+            nb_name = str(nb_device.name)
+
+            if nb_id in linked_libnms:
+                sync_device(libnms, linked_libnms[nb_id], nb_hostname, nb_name)
+            else:
+                match_found = False
+                # Iteratively search for a device which might match
+                for lib_id, lib_dev in list(unlinked_libnms.items()):
+                    if (
+                        lib_dev["hostname"] in (nb_hostname, nb_name, nb_ip)
+                        or lib_dev["display"] == nb_name
+                    ):
+                        libnms.link_device(lib_id, lib_dev["hostname"], nb_id, nb_name)
+                        sync_device(libnms, lib_dev, nb_hostname, nb_name)
+                        del unlinked_libnms[lib_id]
+                        linked_libnms[nb_id] = {
+                            "device_id": lib_id,
+                            "display": lib_dev["display"],
+                            "hostname": lib_dev["hostname"],
+                        }
+                        match_found = True
+                        break
+
+                if not match_found:
+                    # Still not found: try to create it
+                    new_libnms_id = libnms.create_device(nb_hostname, nb_name)
+                    if not libnms.dry_run:
+                        libnms.link_device(new_libnms_id, nb_hostname, nb_id, nb_name)
+                    linked_libnms[nb_id] = {
+                        "device_id": new_libnms_id,
+                        "display": nb_name,
+                        "hostname": nb_hostname,
+                    }
+        except Exception:
+            logging.exception(
+                f"Failed to sync Netbox device '{nb_device}'. Skipping device."
+            )
+            continue
+
+
+def attempt_find_orphans(
+    nb: pynetbox.api, unlinked_devices: dict[str, LibreDeviceInfo]
+) -> dict[str, list[Devices]]:
+    """Attempts to match unlinked LibreNMS devices to NetBox devices which were not fetched."""
+    orphans_and_candidates: dict[str, list[Devices]] = {}
+    for libnms_id, dev in unlinked_devices.items():
+        candidates: set[Devices] = set()
+
+        # Check via IP
+        nb_ip = cast(
+            IpAddresses | None, nb.ipam.ip_addresses.get(dns_name=dev["hostname"])
+        )
+        if not nb_ip:
+            try:
+                ipaddress.ip_address(dev["hostname"])
+                nb_ip = cast(
+                    IpAddresses | None,
+                    nb.ipam.ip_addresses.get(address=dev["hostname"]),
+                )
+            except ValueError:
+                pass
+        if nb_ip:
+            candidates.update(nb.dcim.devices.filter(primary_ip4_id=nb_ip.id))
+            candidates.update(nb.dcim.devices.filter(oob_ip_id=nb_ip.id))
+
+        # Check via display name -> netbox name
+        if dev["display"]:
+            candidates.update(nb.dcim.devices.filter(name=dev["display"]))
+
+        if candidates:
+            resolved = [
+                {
+                    "id": c.id,
+                    "name": c.name,
+                    "role": c.role.slug if c.role else "None",
+                    "tenant": c.tenant.slug if c.tenant else "None",
+                }
+                for c in candidates
+            ]
+            logging.warning(
+                f"Orphaned LibreNMS device {libnms_id} ('{dev['hostname']}') might map to NetBox Device(s): {resolved}\n"
+                "Check Status and Role configs—are they excluded intentionally?"
+            )
+            orphans_and_candidates[libnms_id] = list(candidates)
+        else:
+            logging.warning(
+                f"Orphaned LibreNMS device {libnms_id} ('{dev['hostname']}') not found in NetBox."
+            )
+            orphans_and_candidates[libnms_id] = []
+    return orphans_and_candidates
+
+
+def main() -> None:
+    config_path = Path(__file__).resolve().parent / "config.toml"
+    with config_path.open("rb") as f:
+        config = tomllib.load(f)
+
+    nb_config = config["netbox"]
+
+    rfh = RotatingFileHandler(
+        filename=config["general"]["log_file"], maxBytes=5 * 1024 * 1024, backupCount=1
+    )
+    sh = logging.StreamHandler()
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s:%(levelname)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+        handlers=[rfh, sh],
+    )
+
+    logging.info("Script beginning")
+
+    nb = pynetbox.api(nb_config["api"].rstrip("/") + "/", token=nb_config["token"])
+
+    libnms = LibreNMSClient(
+        api_url=config["librenms"]["api"],
+        token=config["librenms"]["token"],
+        verify=config["librenms"]["ca_verify"],
+        dry_run=config["general"]["dry_run"],
+    )
+    logging.info("[Step 1/6] Loading roles from Netbox")
+    netbox_roles = get_netbox_roles(nb, nb_config)
+    logging.info(f"Found Roles: {netbox_roles}")
+
+    logging.info("[Step 2/6] Loading devices matching tenants/roles from Netbox")
+    devices_init = fetch_netbox_devices(nb, nb_config, netbox_roles)
+    devices_init_count = len(devices_init)
+    logging.info(f"Found {devices_init_count} matching devices")
+
+    logging.info("[Step 3/6] Filtering out Netbox devices without a primary/OOB IP")
+    netbox_devices = filter_netbox_devices(devices_init)
+    netbox_devices_count = len(netbox_devices)
+    logging.info(
+        f"Filtered out {devices_init_count - netbox_devices_count} device(s). Now left with {netbox_devices_count} devices."
+    )
+
+    logging.info("[Step 4/6] Fetching map of Netbox/LibreNMS devices")
+    linked_libnms, unlinked_libnms = fetch_libnms_mapping(
+        client=libnms, netbox_devices=netbox_devices
+    )
+    initial_linked_count = len(linked_libnms)
+    initial_unlinked_count = len(unlinked_libnms)
+    logging.info(
+        f"Found {initial_linked_count} devices already linked to Netbox, and {initial_unlinked_count} not yet linked"
+    )
+
+    logging.info("[Step 5/6] Checking Netbox devices against LibreNMS, and syncing")
+    sync_netbox_librenms(libnms, netbox_devices, linked_libnms, unlinked_libnms)
+    final_linked_count = len(linked_libnms)
+    final_unlinked_count = len(linked_libnms)
+    logging.info(
+        f"{initial_linked_count - final_linked_count} newly linked devices, "
+        f"consisting of {initial_unlinked_count - final_unlinked_count} previously unlinked devices that are now linked, "
+        f"and {final_linked_count + final_unlinked_count - initial_linked_count - initial_unlinked_count} newly-created devices."
+    )
+
+    logging.info(
+        f"[Step 6/6] Checking {final_unlinked_count} remaining unlinked devices for potential orphans"
+    )
+    # TODO: Do something with orphans remaining
+    # For example, add to a LibreNMS device group for visibility
+    orphans_and_candidates = attempt_find_orphans(nb, unlinked_libnms)  # noqa: F841
+
+    logging.info("Script finished")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception:
+        logging.exception("Script failed with an unhandled exception")
+        raise

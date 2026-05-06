@@ -1,0 +1,7 @@
+[project]
+name = "netbox-to-librenms"
+version = "0.1.0"
+description = "Pull new network devices from NetBox to LibreNMS"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["pynetbox==7.5.0", "requests>=2.33.1"]
