@@ -22,17 +22,34 @@ from pynetbox.models.ipam import IpAddresses
 
 
 class LibreDeviceInfo(TypedDict):
+    """
+    Typed dictionary for storing information about a device in 
+    Librenms.
+    """
     device_id: str
     hostname: str
     display: str
 
 
 class LibreNMSClient:
-    """Encapsulates LibreNMS API interactions and error handling."""
+    """
+    Encapsulates LibreNMS API interactions and error handling.
+    """
 
     def __init__(
         self, api_url: str, token: str, verify: bool | str, dry_run: bool
     ) -> None:
+        """
+        Initialize variables for class
+        
+        :param self:
+        :param api_url: URL for LibreNMS API
+        :param token: LibreNMS token
+        :param verify: Determines whether to use TLS verification and CA certificate
+          to verify LibreNMS connection session
+        :param dry_run: Boolean for whether to have a dry run of the command
+        :returns: None
+        """
         self.api_url = api_url.rstrip("/") + "/"
         self.dry_run = dry_run
         self.session = requests.Session()
@@ -40,7 +57,14 @@ class LibreNMSClient:
         self.session.verify = verify
 
     def _request(self, method: str, endpoint: str, **kwargs: Any) -> dict[str, Any]:
-        """Wrapper for requests that automatically handles standard LibreNMS errors."""
+        """
+        Wrapper for requests that automatically handles standard LibreNMS errors.
+
+        :param method: API method to use in request
+        :param endpoint: LibreNMS endpoint
+        :returns: Result of request or an empty dictionary
+        :raises Exception: Raises error when not able to access LibreNMS API
+        """
         url = self.api_url + endpoint.lstrip("/")
         response = self.session.request(method, url, **kwargs)
         response.raise_for_status()
@@ -55,9 +79,23 @@ class LibreNMSClient:
         return data
 
     def get_devices(self) -> list[dict[str, Any]]:
+        """
+        Gets LibreNMS devices and returns request result.
+
+        :param self:
+        :returns: List of LibreNMS devices
+        """
         return self._request("GET", "")["devices"]
 
     def create_device(self, hostname: str, display_name: str) -> str:
+        """
+        Creates device in LibreNMS.
+
+        :param self:
+        :param hostname: hostname for librenms device
+        :param display_name: Display name for librenms device
+        :returns: String containing details of newly created device.
+        """
         if self.dry_run:
             logging.info(
                 f"[DRY RUN] Would create LibreNMS device: {hostname} ('{display_name}')"
@@ -75,6 +113,17 @@ class LibreNMSClient:
         return str(res["devices"][0]["device_id"])
 
     def remove_overwrite_ip(self, device_id: str, hostname: str) -> None:
+        """
+        overwrite_ip fields have been deprecated in LibreNMS in favor 
+        of hostname and display.
+        This method removes the overwrite IP address that is stored in 
+        the device's data field.
+    
+        :param self:
+        :param device_id: librenms device ID
+        :param hostname: name of host associated with a librenms device
+        :returns: None
+        """
         if self.dry_run:
             logging.info(
                 f"[DRY RUN] Would remove deprecated overwrite IP for '{hostname}'"
@@ -87,12 +136,29 @@ class LibreNMSClient:
         )
 
     def get_netbox_component(self, hostname: str) -> dict[str, Any]:
+        """
+        Get a Netbox component based on a hostname in LibreNMS.
+
+        :param self:
+        :param hostname: Name of host
+        :returns: NetBox component dictionary for that specific hostname in LibreNMS
+        """
         res = self._request("GET", f"{hostname}/components?type=netbox_id")
         return res.get("components", {})
 
     def unlink_component(
         self, device_id: str, component_id: str, netbox_id: str, hostname: str
     ) -> None:
+        """
+        Remove reference, unlinking, the NetBox ID from a hostname and delete the component
+        from LibreNMS.
+
+        :param self:
+        :param device_id: LibreNMS device ID
+        :param component_id: LibreNMS component ID for a host
+        :param netbox_id: NetBox device ID
+        :returns: None
+        """
         if self.dry_run:
             logging.info(
                 f"[DRY RUN] Would unlink Netbox ID '{netbox_id}' from '{hostname}'"
@@ -107,6 +173,18 @@ class LibreNMSClient:
     def link_device(
         self, libnms_id: str, libnms_hostname: str, netbox_id: str, netbox_name: str
     ) -> None:
+        """
+        Links hostname in LibreNMS to the ID of the Device record in NetBox.
+        This is done by updating the components of a device in LibreNMS to include
+        the NetBox device ID and name in Netbox for the host.
+
+        :param self:
+        :param libnms_id: Device ID in librenms for the host
+        :param libnms_hostname: Hostname for device in LibreNMS
+        :param netbox_id: Device ID in NetBox for the host
+        :param netbox_name: Name of device in NetBox
+        :returns: None
+        """
         if self.dry_run:
             logging.info(
                 f"[DRY RUN] Would link '{libnms_hostname}' to NetBox ID {netbox_id} ('{netbox_name}')"
@@ -132,6 +210,15 @@ class LibreNMSClient:
         self._request("PUT", f"{libnms_id}/components", json=component_data)
 
     def rename_device(self, libnms_id: str, old_name: str, new_name: str) -> None:
+        """
+        Rename a device in LibreNMS. This changes the hostname for the device in LibreNMS.
+
+        :param self:
+        :param libnms_id: Device ID in libreNMS
+        :param old_name: Current device name 
+        :param new_name: New name to use for device
+        :returns: None
+        """
         if self.dry_run:
             logging.info(f"[DRY RUN] Would rename '{old_name}' to '{new_name}'")
             return
@@ -141,6 +228,16 @@ class LibreNMSClient:
     def update_display_name(
         self, libnms_id: str, hostname: str, old_display: str, new_display: str
     ) -> None:
+        """
+        Change the display name for a device in LibreNMS
+
+        :param self:
+        :param libnms_id: Device ID in libreNMS
+        :param hostname: Device hostname
+        :param old_name: Current display name 
+        :param new_name: New display name to use on device
+        :returns: None
+        """
         if self.dry_run:
             logging.info(
                 f"[DRY RUN] Would update display name for '{hostname}' from '{old_display}' to '{new_display}'"
@@ -157,6 +254,14 @@ class LibreNMSClient:
 def fetch_netbox_devices(
     nb: pynetbox.api, nb_config: dict[str, Any], netbox_roles: list[str]
 ) -> list[Devices]:
+    """
+    Fetch all devices in NetBox
+
+    :param nb: pynetbox API
+    :param nb_config: NetBox config values provided from config.toml file
+    :param netbox_roles: Roles in NetBox
+    :returns: List of NetBox Devices
+    """
     tenant_slugs = [str(t) for t in nb_config["tenants"] if not str(t).isdigit()]
     tenant_ids = [int(t) for t in nb_config["tenants"] if str(t).isdigit()]
 
@@ -181,6 +286,12 @@ def fetch_netbox_devices(
 
 
 def filter_netbox_devices(devices_init: list[Devices]) -> dict[str, Devices]:
+    """
+    Filter devices from NetBox to devices that have a primary IP Address
+
+    :param devices_init: List of devices fetched from NetBox
+    :returns: Dictionary of devices with primary IP addresses found in NetBox
+    """
     valid_devices: dict[str, Devices] = {}
     for device in devices_init:
         if device.primary_ip or device.oob_ip:
@@ -191,6 +302,13 @@ def filter_netbox_devices(devices_init: list[Devices]) -> dict[str, Devices]:
 
 
 def get_netbox_roles(nb: pynetbox.api, nb_config: dict[str, Any]) -> list[str]:
+    """
+    Gets list of Roles used in Netbox
+
+    :param nb: NetBox API
+    :param nb_config: NetBox config values provided from config.toml file
+    :returns: List of roles found in NetBox
+    """
     netbox_roles = [
         str(nb.dcim.device_roles.get(slug=r).slug)  # type: ignore
         for r in nb_config["roles"]
@@ -206,7 +324,13 @@ def fetch_libnms_mapping(
     client: LibreNMSClient,
     netbox_devices: dict[str, Devices],
 ) -> tuple[dict[str, LibreDeviceInfo], dict[str, LibreDeviceInfo]]:
-    """Maps LibreNMS devices to NetBox IDs, identifying linked and unlinked devices."""
+    """
+    Maps LibreNMS devices to NetBox IDs, identifying linked and unlinked devices.
+
+    :param client: LibreNMS client
+    :param netbox_devices: Dictionary of devices in NetBox
+    :returns: Tuple containing dictionaries of linked and unlinked devices
+    """
     linked: dict[str, LibreDeviceInfo] = {}
     unlinked: dict[str, LibreDeviceInfo] = {}
 
@@ -266,7 +390,15 @@ def sync_device(
     nb_hostname: str,
     nb_name: str,
 ) -> None:
-    """Checks and updates LibreNMS device hostnames and display names if out of sync."""
+    """Checks and updates LibreNMS device hostnames based on corresponding NetBox 
+    record and display names if out of sync
+
+    :param client: LibreNMS client
+    :param libnms_info: Device information in LibreNMS
+    :param nb_hostname: Device hostname in NetBox
+    :param nb_name: Device name in NetBox
+    :returns: None
+    ."""
     libnms_id = libnms_info["device_id"]
 
     if libnms_info["hostname"].lower() != nb_hostname.lower():
@@ -281,7 +413,16 @@ def sync_device(
 
 
 def get_netbox_ip_and_hostname(device: Devices, test=None) -> tuple[str, str]:
-    """Extracts preferred IP and hostname from a NetBox device."""
+    """
+    Extracts preferred IP and hostname from a NetBox device.
+    Preferred IP Addres is an Out of Band (OOB) IP Address, else default to storing the 
+    primary IPv4 Address.
+
+    :param device: NetBox device
+    :param test: ?
+    :returns: Tuple with IP Address and Hostname of device from NetBox
+    """
+    # oob_ip: Out Of Band IP/ Management Network IP
     target_ip = cast(
         IpAddresses, device.oob_ip if device.oob_ip else device.primary_ip4
     )
@@ -301,6 +442,17 @@ def sync_netbox_librenms(
     linked_libnms: dict[str, LibreDeviceInfo],
     unlinked_libnms: dict[str, LibreDeviceInfo],
 ) -> None:
+    """
+    Sync device information between LibreNMS and NetBox, where NetBox is the 
+    source of truth. If a device in NetBox does not exist in LibreNMS, the method 
+    attempts to create a new device in LibreNMS and link it to the record in NetBox.
+
+    :param libnms: LibreNMS Client
+    :param netbox_devices: Dictionary of devices in NetBox
+    :param linked_libnms: Devices in LibreNMS that are linked to corresponding NetBox Device
+    :param unlinked_libnms: Devices in LibreNMS that are not linked to a corresponding NetBox Device
+    :returns: None 
+    """
     for nb_id, nb_device in netbox_devices.items():
         try:
             nb_ip, nb_hostname = get_netbox_ip_and_hostname(nb_device)
@@ -347,7 +499,13 @@ def sync_netbox_librenms(
 def attempt_find_orphans(
     nb: pynetbox.api, unlinked_devices: dict[str, LibreDeviceInfo]
 ) -> dict[str, list[Devices]]:
-    """Attempts to match unlinked LibreNMS devices to NetBox devices which were not fetched."""
+    """
+    Attempts to match unlinked LibreNMS devices to NetBox devices which were not fetched.
+
+    :param nb: NetBox API
+    :param unlinked_devices: Dictionary of devices in LibreNMS that are not linked to a record in NetBox
+    :returns: Dictionary of orphaned devices in LibreNMS that cannot be found in NetBox
+    """
     orphans_and_candidates: dict[str, list[Devices]] = {}
     for libnms_id, dev in unlinked_devices.items():
         candidates: set[Devices] = set()
@@ -397,6 +555,19 @@ def attempt_find_orphans(
 
 
 def main() -> None:
+    """
+    Main method for syncing LibreNMS devices to corresponding devices in NetBox.
+    This is done in stages:
+    
+    - 1: Loads device roles from NetBox
+    - 2: Loads device types from NetBox
+    - 3: Loads devices from NetBox that have a primary/OOB (Out Of Band) IP Addresses
+    - 4: Fetches mapping of devices between NetBox and LibreNMS
+    - 5: Checks list of devices in LibreNMS against NetBox and syncs device details
+    - 6: Identifies list of orphaned devices in LibreNMS
+
+    :returns: None
+    """
     config_path = Path(__file__).resolve().parent / "config.toml"
     with config_path.open("rb") as f:
         config = tomllib.load(f)
